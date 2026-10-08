@@ -1,0 +1,19 @@
+INIT "Alice Smith"
+COMMIT "Initial commit"
+BRANCH feature
+SWITCH feature
+USER "Bob Lee"
+COMMIT "Add login feature"
+SWITCH main
+USER "Alice Smith"
+COMMIT "Add payment feature"
+MERGE feature
+LOG
+PATH c00000002 c00000003
+ANCESTORS c00000004
+SEARCH login
+SEARCH "login feature"
+SEARCH --author="Bob Lee"
+LOG --sort-by=date
+LOG --sort-by=author
+quit

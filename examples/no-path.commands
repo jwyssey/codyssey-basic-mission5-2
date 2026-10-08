@@ -1,0 +1,8 @@
+INIT Alice
+BRANCH orphan
+COMMIT "First root"
+SWITCH orphan
+COMMIT "Second root"
+PATH c00000001 c00000002
+PATH c00000001 missing
+quit
