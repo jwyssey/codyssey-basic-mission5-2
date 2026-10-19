@@ -1,339 +1,740 @@
 # Mini Git 평가표 답변
 
-평가표의 **4개 항목, 20개 질문을 원래 순서대로** 정리했습니다. 각 답변은 실제 구현 방식, 확인 방법, 필요한 알고리즘 설명을 함께 제공합니다.
+평가표의 **4개 항목, 20개 질문의 문구와 순서를 그대로 유지**했습니다. 각 질문의 **답변**은 평가 때 설명할 핵심이고, 이어지는 예시와 코드는 그 원리를 이해하기 위한 내용입니다.
 
-## 먼저 실행해 보기
+이 프로그램은 커밋의 메시지·작성자·시간·부모 관계를 **메모리에 저장하는 학습용 Mini Git**입니다. 실제 파일 내용, 스테이징 영역, 디스크 저장, 네트워크 통신은 구현하지 않았습니다. 종료하면 이력이 사라집니다.
 
-이 문서가 있는 저장소 폴더에서 실행합니다. 외부 패키지는 필요하지 않습니다.
+필요한 부분으로 바로 이동할 수 있습니다.
+
+- [항목 1 — 기능 동작](#항목-1--기능-동작)
+- [항목 2 — 구조와 설계](#항목-2--구조와-설계)
+- [항목 3 — 알고리즘 이해](#항목-3--알고리즘-이해)
+- [항목 4 — 확장과 변경 대응](#항목-4--확장과-변경-대응)
+- [부록 A — Python 표현](#부록-a--코드에서-낯설-수-있는-python-표현)
+- [부록 B — 테스트 실행](#부록-b--테스트로-확인하기)
+
+## 먼저 실행하고 예제 이해하기
+
+이 문서와 `main.py`가 있는 프로젝트 폴더에서 실행합니다. Python 3.10 이상이면 외부 패키지 설치 없이 사용할 수 있습니다.
 
 ```bash
-python main.py
-python main.py < examples/demo.commands
-python main.py < examples/no-path.commands
-python -m unittest discover -s tests -v
+python3 main.py
 ```
 
-`demo.commands`는 분기·병합·검색·정렬을, `no-path.commands`는 연결되지 않은 커밋을 확인하는 예제입니다. Python 3.13.5에서 **44개 테스트가 모두 통과**했습니다.
-
-설명을 위한 기본 예제의 커밋은 다음과 같습니다. 그림의 화살표는 부모에서 자식 방향입니다.
+`mini-git>`가 나오면 아래 명령을 한 줄씩 입력합니다. 공백이 있는 인자는 따옴표로 감쌉니다.
 
 ```text
-                    c00000002
-                   /          \
-       c00000001 --             c00000004
-                   \          /
-                    c00000003
+INIT "Alice Smith"
+COMMIT "Initial commit"
+BRANCH feature
+SWITCH feature
+USER "Bob Lee"
+COMMIT "Add login feature"
+SWITCH main
+USER "Alice Smith"
+COMMIT "Add payment feature"
+MERGE feature
 ```
 
-| hash | 작성자 | 메시지 | 부모 |
-| --- | --- | --- | --- |
-| `c00000001` | Alice Smith | Initial commit | 없음 |
-| `c00000002` | Bob Lee | Add login feature | `c00000001` |
-| `c00000003` | Alice Smith | Add payment feature | `c00000001` |
-| `c00000004` | Alice Smith | Merge branch 'feature' | `c00000003`, `c00000002` |
+이후 `LOG`, `PATH`, `ANCESTORS`, `SEARCH`를 실행할 수 있습니다. `HELP`는 도움말, `exit` 또는 `quit`는 종료 명령입니다.
+
+이 예제의 커밋을 설명할 때는 **A·B·C·D로 줄여 부릅니다.** 실제 CLI에는 전체 ID를 입력해야 합니다. 코드의 `hash`는 이 커밋 ID를 뜻합니다.
+
+| 설명용 이름 | 실제 커밋 ID | 작성자 | 메시지 | 부모 |
+| --- | --- | --- | --- | --- |
+| A | `c00000001` | Alice Smith | Initial commit | 없음 |
+| B | `c00000002` | Bob Lee | Add login feature | A |
+| C | `c00000003` | Alice Smith | Add payment feature | A |
+| D | `c00000004` | Alice Smith | Merge branch 'feature' | C, B |
+
+화살표는 부모에서 자식으로 향합니다. A는 부모가 없는 **루트 커밋**, D는 부모가 둘인 **병합 커밋**입니다.
+
+```text
+A → B → D
+A → C → D
+
+feature는 B를 가리킴
+main은 D를 가리킴
+HEAD → main → D
+```
+
+브랜치는 커밋을 가리키는 이름이고, **HEAD는 현재 브랜치가 가리키는 커밋**입니다. 이 구분이 아래 설명의 기준입니다.
+
+예제 전체를 자동 입력하려면 다음 명령을 사용합니다.
+
+```bash
+python3 main.py < examples/demo.commands
+python3 main.py < examples/no-path.commands
+```
+
+첫 예제는 분기·병합·검색·정렬을, 두 번째는 연결되지 않은 커밋 사이의 경로를 보여 줍니다. 테스트 실행법과 검증 내용은 [부록 B](#부록-b--테스트로-확인하기)에 모았습니다.
 
 ## 항목 1 — 기능 동작
 
 ### 1.1 INIT <user_name> 실행 후 main 브랜치/HEAD/현재 사용자 설정이 정상적으로 초기화되어 있는가?
 
-**답변:** 정상적으로 초기화됩니다. `INIT "Alice Smith"`를 실행하면 브랜치 목록은 `{"main": None}`, 현재 브랜치는 `main`, 현재 사용자는 `Alice Smith`가 됩니다. 아직 커밋이 없으므로 HEAD는 `None`입니다. 첫 `COMMIT`을 생성하면 HEAD가 그 커밋의 hash를 가리킵니다.
+**답변:** 네. `INIT`은 빈 `main` 브랜치와 현재 사용자를 설정합니다. 아직 커밋이 없으므로 HEAD는 `None`이고, 첫 커밋을 만들면 그 커밋을 가리킵니다.
 
-`INIT`을 다시 실행하면 기존 커밋·브랜치·그래프·역색인을 비웁니다. 다만 같은 세션에서 hash가 재사용되지 않도록 카운터는 유지합니다. 이름이 비어 있는 잘못된 입력은 상태를 바꾸기 전에 거부합니다.
+`INIT "Alice Smith"` 직후의 상태는 다음과 같습니다.
 
-**코드:** [repository.py](minigit/repository.py)의 `Repository.initialize`, `head`.
+```python
+branches = {"main": None}
+current_branch = "main"
+current_user = "Alice Smith"
+# head는 branches[current_branch]를 조회하므로 None
+```
 
-**확인:** [test_repository.py](tests/test_repository.py)의 `test_initialization`, `test_hash_unique_across_reinitialization`, `test_invalid_reinitialize_preserves_state`.
+`INIT`을 다시 실행하면 커밋·브랜치·부모/자식 관계·검색 색인을 비웁니다. 다만 같은 실행 세션에서 커밋 ID가 재사용되지 않도록 ID 카운터는 유지합니다. 빈 사용자명은 상태를 바꾸기 전에 거부합니다. 작성자만 바꾸려면 이력을 지우는 `INIT` 대신 `USER`를 사용합니다.
+
+**코드 위치:** [repository.py](minigit/repository.py)의 `Repository.initialize()`, `head`, `set_user()`.
 
 ### 1.2 BRANCH <name> 생성 후 SWITCH <name> 로 전환되며, 이후 COMMIT 이 해당 브랜치에 반영되는가?
 
-**답변:** 새 브랜치는 현재 HEAD를 복사해 가리킵니다. `BRANCH feature` 자체는 현재 브랜치를 바꾸지 않습니다. `SWITCH feature`로 전환한 뒤 커밋하면 `feature`의 포인터만 새 커밋으로 이동하며 `main`은 기존 커밋을 유지합니다.
+**답변:** 네. `BRANCH`는 현재 HEAD와 같은 커밋을 가리키는 새 브랜치 이름을 등록합니다. `SWITCH`로 전환한 뒤 커밋하면 현재 브랜치만 새 커밋으로 이동합니다.
 
-예를 들어 `main`의 첫 커밋이 `c00000001`이라면, feature에서 만든 `c00000002`의 부모는 `c00000001`입니다. 이때 `main`은 여전히 `c00000001`을 가리킵니다.
+`main`이 A를 가리키는 상태에서 진행하면 다음과 같습니다.
 
-**코드:** [repository.py](minigit/repository.py)의 `branch`, `switch`, `commit`, `_create_commit`.
+| 명령 | 현재 브랜치 | main이 가리키는 커밋 | feature가 가리키는 커밋 |
+| --- | --- | --- | --- |
+| `BRANCH feature` | main | A | A |
+| `SWITCH feature` | feature | A | A |
+| `COMMIT "Add login feature"` | feature | A | 새 커밋 B |
 
-**확인:** `test_branch_switch_and_commit_update_only_current_branch`. 중복 브랜치와 없는 브랜치도 `test_bad_branch_operations_leave_state_unchanged`에서 검사합니다.
+핵심 코드는 `self.branches[name] = self.head`입니다. **브랜치를 만들 때 새 커밋은 생기지 않습니다.** 기존 커밋을 가리키는 이름만 추가하며, 현재 브랜치도 자동으로 바뀌지 않습니다. 미커밋 파일 변경이나 스테이징 내용을 복사하는 기능도 아닙니다.
+
+커밋을 만들기 전에 빈 브랜치를 두 개 만들면 둘 다 `None`을 가리킵니다. 이후 각 브랜치에서 첫 커밋을 만들면 서로 연결되지 않은 루트 커밋이 생길 수 있습니다.
+
+**코드 위치:** [repository.py](minigit/repository.py)의 `branch()`, `switch()`, `commit()`, `_create_commit()`.
 
 ### 1.3 LOG 가 "부모 커밋이 자식 커밋보다 먼저" 출력되도록 동작하는가?
 
-**답변:** 기본 `LOG`는 Kahn 위상 정렬을 사용하므로 모든 부모가 출력된 뒤에 자식을 출력합니다. 현재 브랜치뿐 아니라 저장소의 모든 커밋을 보여 줍니다.
+**답변:** 네. 기본 `LOG`는 모든 부모가 처리된 커밋만 결과에 추가하는 Kahn 위상 정렬을 사용합니다. 병합 커밋도 두 부모 뒤에 나옵니다.
 
-예제의 출력 순서는 `c00000001 → c00000002 → c00000003 → c00000004`입니다. 병합 커밋 `c00000004`도 두 부모가 모두 출력된 뒤에 나옵니다. 커밋의 hash·작성자·timestamp·메시지를 표시하며, 브랜치 끝에는 브랜치명과 HEAD도 표시합니다.
+기본 예제에서는 `A, B, C, D` 순서로 출력합니다. D는 B와 C가 모두 처리되어야 출력할 수 있습니다. B와 C 사이에는 부모·자식 관계가 없으므로, 일반적으로는 둘의 순서가 바뀌어도 부모 우선 조건을 만족합니다.
 
-시계가 뒤로 움직여 자식의 timestamp가 부모보다 작아져도 기본 LOG는 관계를 기준으로 출력하므로 부모가 먼저 나옵니다. `LOG --sort-by=...`는 명세의 별도 정렬 기준을 적용합니다.
+`LOG`는 현재 브랜치뿐 아니라 **저장소의 모든 커밋**을 보여 줍니다. 각 커밋의 ID·작성자·시간·메시지를 표시하고, 브랜치가 가리키는 커밋에는 브랜치명과 HEAD 표시를 붙입니다.
 
-**코드:** [algorithms.py](minigit/algorithms.py)의 `topological_order`, [cli.py](minigit/cli.py)의 `_format_commits`.
+부모 우선 순서는 timestamp가 아니라 연결 관계로 결정합니다. 따라서 시계가 뒤로 움직여도 유지됩니다. 다만 `LOG --sort-by=date`와 `LOG --sort-by=author`는 별도 정렬이므로 부모 우선 조건을 보장하지 않습니다.
 
-**확인:** `test_log_includes_all_branches_and_parent_first_after_merge`, `test_date_sort_is_ascending_and_stable`, `test_log_includes_identifiable_fields_and_head`.
+**코드 위치:** [repository.py](minigit/repository.py)의 `log()` → [models.py](minigit/models.py)의 `log_order()` → [algorithms.py](minigit/algorithms.py)의 `topological_order()`. 표시 문자열은 [cli.py](minigit/cli.py)의 `_format_commits()`가 만듭니다. 알고리즘 과정은 3.2에서 설명합니다.
 
 ### 1.4 PATH <a> <b> 가 경로가 있으면 최단 경로를, 없으면 No path 를 출력하는가?
 
-**답변:** 부모 연결을 무방향 간선으로 보고 BFS로 최단 거리를 구합니다. 같은 최단 길이의 경로가 여럿이면 전체 `hash1->hash2->...` 문자열의 사전순이 가장 작은 경로를 선택합니다.
+**답변:** 네. 부모와 자식 양쪽으로 이동할 수 있다고 보고, 연결을 가장 적게 건너는 경로를 구합니다. 같은 길이의 경로가 여러 개면 경로 문자열의 사전순이 가장 앞선 것을 선택합니다.
 
-예제에서 `PATH c00000002 c00000003`에는 공통 부모와 병합 커밋을 각각 거치는 두 경로가 있습니다. 둘 다 간선이 2개지만, `c00000001`이 `c00000004`보다 사전순으로 작으므로 결과는 다음과 같습니다.
+기본 예제에서 B와 C 사이에는 두 최단 경로가 있습니다.
 
 ```text
+B → A → C   # 공통 부모를 거침
+B → D → C   # 병합 커밋을 거침
+```
+
+둘 다 두 번 이동합니다. A의 ID가 D의 ID보다 사전순으로 앞서므로 다음 결과를 선택합니다.
+
+```text
+mini-git> PATH c00000002 c00000003
 Path: c00000002->c00000001->c00000003
 ```
 
-연결되지 않은 유효한 두 커밋에는 `No path`를 출력합니다. 없는 hash에는 `Unknown commit: <hash>`를 출력합니다. 시작과 끝이 같으면 그 커밋 하나를 출력하며 간선 수는 0입니다.
+| 상황 | 결과 |
+| --- | --- |
+| 두 커밋은 존재하지만 서로 연결되지 않음 | `No path` |
+| 입력한 ID의 커밋이 존재하지 않음 | `Unknown commit: <hash>` |
+| 시작과 끝이 같은 커밋 | 해당 ID 하나만 반환, 이동 횟수 0 |
 
-**코드:** [algorithms.py](minigit/algorithms.py)의 `shortest_path`, [repository.py](minigit/repository.py)의 `path`.
-
-**확인:** `test_path_lexicographic_tie_in_both_directions`, `test_disconnected_nodes`, `test_identical_endpoints`, `test_unknown_commit_differs_from_no_path`. CLI의 `No path` 출력은 `test_no_path_and_same_commit_output`과 [no-path.commands](examples/no-path.commands)로 확인합니다.
+**코드 위치:** [repository.py](minigit/repository.py)의 `path()`, [algorithms.py](minigit/algorithms.py)의 `shortest_path()`. BFS가 목적지에서 시작하는 이유와 경로 선택 과정은 3.3에서 설명합니다.
 
 ### 1.5 ANCESTORS <hash> 가 모든 조상을 빠짐없이 출력하는가?
 
-**답변:** 부모 방향으로 반복형 DFS를 수행해 도달 가능한 모든 조상을 찾습니다. 방문 집합으로 공통 조상의 중복을 막고, 시작 커밋은 결과에서 제외합니다. 출력은 hash 오름차순입니다.
+**답변:** 네. 부모 방향으로 계속 올라가 모든 조상을 찾습니다. 방문한 ID를 집합으로 기록해 공통 조상을 한 번만 포함하고, 시작 커밋 자신은 제외합니다.
 
-`ANCESTORS c00000004`는 두 부모인 `c00000002`·`c00000003`과 그 공통 부모인 `c00000001`을 각각 한 번씩 출력합니다. 루트 커밋에는 `No ancestors`를 출력합니다.
+기본 예제에서 D의 부모는 C와 B이고, 둘의 부모는 A입니다. 따라서 `ANCESTORS c00000004`의 출력 대상은 A·B·C입니다. 표시할 때는 ID 오름차순으로 정렬합니다. A처럼 부모가 없는 커밋에는 `No ancestors`를 출력합니다.
 
-재귀 대신 리스트 스택을 사용하므로 이력이 깊어져도 Python의 재귀 깊이 제한에 걸리지 않습니다.
+```python
+ancestor_ids(parents, start)
+# parents: 전체 커밋의 부모 관계 딕셔너리
+# start:   조상을 찾을 커밋 ID 하나
+```
 
-**코드:** [algorithms.py](minigit/algorithms.py)의 `ancestor_ids`, [repository.py](minigit/repository.py)의 `ancestors`.
+`start`만으로는 부모가 누구인지 알 수 없습니다. `parents[start]`로 부모를 찾고, 그 부모의 부모도 같은 딕셔너리에서 조회합니다. 자식 방향으로는 이동하지 않으므로 `children`은 필요 없습니다.
 
-**확인:** `test_merge_ancestors_include_both_branches_once`, `test_all_ancestors_without_duplicates_or_self`, `test_long_history_does_not_recurse`. 마지막 테스트는 깊이 2,000의 이력을 검사합니다.
+탐색은 재귀 대신 리스트를 스택으로 사용하는 DFS입니다.
+
+1. 시작 커밋을 방문 집합에 넣어 결과에서 제외합니다.
+2. 시작 커밋의 부모들을 스택에 넣습니다.
+3. 맨 뒤에서 ID 하나를 꺼내, 처음 방문했다면 결과에 추가합니다.
+4. 그 커밋의 부모들을 스택에 넣고 반복합니다.
+
+기본 예제의 D는 부모가 `(C, B)`이므로 스택에서 B → A → C 순서로 처리합니다. C에서 A를 다시 만나도 이미 방문했으므로 건너뜁니다. `ancestor_ids()`가 찾은 순서는 B·A·C이고, `Repository.ancestors()`가 정렬한 출력 순서는 A·B·C입니다.
+
+커밋 2,000개를 일렬로 연결하고 마지막 커밋의 조상 1,999개를 찾는 테스트도 있습니다. 반복문을 사용하므로 재귀 깊이 제한에 걸리지 않습니다.
+
+**코드 위치:** [algorithms.py](minigit/algorithms.py)의 `ancestor_ids()`, [repository.py](minigit/repository.py)의 `ancestors()`.
 
 ### 1.6 SEARCH <keyword> / SEARCH --author=<name> / LOG --sort-by=date|author 가 요구사항대로 동작하는가?
 
-**답변:** 두 검색은 역색인을 사용하고, 두 정렬은 직접 구현한 안정 병합 정렬을 사용합니다.
+**답변:** 네. 키워드와 작성자는 미리 만든 검색 색인으로 찾고, 날짜·작성자 로그는 직접 구현한 병합 정렬로 정렬합니다.
 
-| 명령 | 적용 규칙 | 예제 결과 |
+| 명령 | 동작 | 기본 예제의 결과 |
 | --- | --- | --- |
-| `SEARCH LOGIN` | 메시지를 공백 분리·소문자 정규화한 토큰 검색 | `c00000002` |
-| `SEARCH "login feature"` | 모든 검색 토큰이 존재하는 AND 검색 | `c00000002` |
-| `SEARCH --author="Bob Lee"` | 작성자 이름의 정확한 일치 | `c00000002` |
-| `LOG --sort-by=date` | timestamp 오름차순, 동률은 생성 순서 유지 | 통상적인 시계에서는 생성 순서 |
-| `LOG --sort-by=author` | 작성자 이름 오름차순, 동률은 생성 순서 유지 | `c00000001`, `c00000003`, `c00000004`, `c00000002` |
+| `SEARCH LOGIN` | 메시지에 `login` 단어가 있는 커밋 검색 | B |
+| `SEARCH "login feature"` | 두 단어가 모두 있는 커밋 검색 | B |
+| `SEARCH --author="Bob Lee"` | 작성자 이름이 정확히 일치하는 커밋 검색 | B |
+| `LOG --sort-by=date` | 시간 오름차순 | 시각도 생성 순으로 증가했다면 A·B·C·D |
+| `LOG --sort-by=author` | 작성자 이름 오름차순 | A·C·D·B |
 
-키워드는 부분 문자열이 아닌 토큰 단위로 비교합니다. 따라서 `log`는 `login`을 찾지 않으며, 문장부호가 있는 `login,`도 `login`과 다릅니다. 작성자 검색은 대소문자를 구분합니다. 정렬 옵션에는 부모-자식 선후 유지 조건을 추가하지 않았습니다.
+키워드는 `lower().split()`으로 처리하므로 대소문자는 구분하지 않지만, 부분 문자열 검색은 아닙니다. `log`로 `login`을 찾을 수 없고, `login,`도 `login`과 다른 단어입니다. 작성자 검색은 공백과 대소문자까지 정확히 일치해야 합니다.
 
-**코드:** [index.py](minigit/index.py)의 `tokenize`, `InvertedIndex`; [repository.py](minigit/repository.py)의 `search`, `log`; [algorithms.py](minigit/algorithms.py)의 `merge_sort`.
+검색 결과는 ID 오름차순입니다. 날짜·작성자 로그는 비교 값이 같으면 생성 순서를 유지합니다. 단, 이 옵션 로그는 부모보다 자식이 먼저 나올 수 있습니다.
 
-**확인:** `test_keyword_normalization_duplicates_and_punctuation`, `test_multiple_keywords_use_and`, `test_author_search_exact_and_user_change_preserves_history`, `test_date_sort_is_ascending_and_stable`, `test_author_sort_is_ascending_and_stable`.
+**코드 위치:** [index.py](minigit/index.py)의 `tokenize()`, `by_keywords()`, `by_author()`; [repository.py](minigit/repository.py)의 `search()`, `log()`; [algorithms.py](minigit/algorithms.py)의 `merge_sort()`.
 
 ## 항목 2 — 구조와 설계
 
 ### 2.1 커밋 저장소/브랜치/HEAD/사용자 정보를 어떤 구조로 분리했고, 각 책임을 설명할 수 있는가?
 
-**답변:** `Repository`가 상태를 조합하되 각 정보의 책임은 나누었습니다.
+**답변:** `Repository`는 저장소 전체 상태를 관리하고, 커밋 객체·연결 관계·검색 색인은 별도 클래스로 나누었습니다. CLI는 입력과 출력만 담당합니다.
 
-| 구조 | 예시 | 책임 |
+| 저장하는 정보 | 실제 자료구조 또는 값 | 역할 |
 | --- | --- | --- |
-| `commits: dict[str, Commit]` | `hash → Commit` | 커밋 메타데이터 저장·조회 |
-| `branches: dict[str, str \| None]` | `main → c00000004` | 브랜치가 가리키는 커밋 관리 |
-| `current_branch` | `main` | HEAD가 따라가는 현재 브랜치 |
-| `head` 프로퍼티 | `branches[current_branch]` | 현재 커밋 조회; 별도 값 중복 저장을 피함 |
-| `current_user` | `Alice Smith` | 이후 커밋의 작성자 |
-| `CommitGraph` | 부모·자식 인접 목록 | 그래프 관계와 탐색 |
-| `InvertedIndex` | 토큰/작성자 → hash 집합 | 검색 후보 조회 |
+| `commits` | `dict[str, Commit]` | ID로 실제 커밋 객체 조회 |
+| `branches` | 브랜치 이름 → 커밋 ID 또는 `None`인 딕셔너리 | 각 브랜치의 마지막 커밋 관리 |
+| `current_branch` | 문자열, 초기화 전에는 `None` | 현재 작업 중인 브랜치 이름 |
+| `head` | `branches.get(current_branch)`의 결과 | 현재 브랜치가 가리키는 커밋 ID |
+| `current_user` | 문자열, 초기화 전에는 `None` | 이후 커밋의 작성자 |
+| `graph.parents` | `dict[str, tuple[str, ...]]` | 커밋별 부모 ID들 |
+| `graph.children` | `dict[str, list[str]]` | 커밋별 자식 ID들 |
+| `index` | 단어/작성자 → ID 집합인 딕셔너리들 | 검색 후보 조회 |
 
-`Commit`은 `hash`, `message`, `author`, `timestamp`, `parents`를 가진 frozen dataclass입니다. 부모는 tuple이므로 생성된 커밋의 부모 관계를 바꾸지 않습니다. CLI는 입력과 출력을 맡고, Repository는 상태 변경을 맡습니다. `USER`는 이후 커밋의 사용자만 바꾸므로 기존 작성자와 이력은 유지됩니다.
+HEAD는 별도로 저장하지 않고 현재 브랜치에서 계산합니다.
 
-**코드:** [models.py](minigit/models.py), [repository.py](minigit/repository.py), [cli.py](minigit/cli.py).
+```python
+@property
+def head(self) -> str | None:
+    return self.branches.get(self.current_branch)
+```
+
+따라서 `SWITCH`가 `current_branch`를 바꾸면 HEAD도 바뀝니다. `@property`이므로 호출할 때는 `repo.head()`가 아니라 `repo.head`라고 씁니다.
+
+커밋 객체는 `Commit(hash, message, author, timestamp, parents)` 형태입니다. `@dataclass`가 생성자를 자동으로 만들고, `frozen=True`가 생성 후 필드 재할당을 막습니다. 부모는 생성 시 결정되므로 튜플로 보관하고, 자식은 새 커밋이 생길 때 추가하므로 리스트로 보관합니다.
+
+`dict[...]` 같은 타입 힌트는 실행 중 자료형을 강제하지 않습니다. 타입 힌트와 `frozen=True`의 동작은 구분해야 합니다. 자세한 표기와 부모·자식 딕셔너리 예시는 [부록 A](#부록-a--코드에서-낯설-수-있는-python-표현)에 정리했습니다.
+
+**코드 위치:** [repository.py](minigit/repository.py)의 `Repository.__init__()`, `head`; [models.py](minigit/models.py)의 `Commit`, `CommitGraph.__init__()`.
 
 ### 2.2 커밋 hash로 빠르게 조회하기 위해 어떤 키-값 구조를 사용했고, 중복/충돌을 어떻게 방지했는지 설명할 수 있는가?
 
-**답변:** Python `dict`에 `commits[hash] = Commit` 형태로 저장합니다. 키 하나로 조회하므로 평균 시간복잡도는 `O(1)`입니다.
+**답변:** `commits[hash] = commit` 형태의 딕셔너리에 저장해 ID로 평균 `O(1)`에 조회합니다. ID는 증가하는 카운터로 만들고, 같은 `Repository`를 사용하는 세션에서 재사용하지 않습니다.
 
-hash는 `c` 뒤에 8자리 16진수 카운터를 붙인 `c00000001`, `c00000002`, … 형태입니다. 생성 성공 후 카운터를 증가시키고, `INIT`에서도 카운터를 초기화하지 않습니다. 따라서 한 REPL 세션에서 기존에 사용한 ID를 재사용하지 않습니다. 8자리 최대값을 넘으면 오류를 내며, 더 긴 ID나 중복 ID를 만들지 않습니다.
+실제 객체 생성은 `_create_commit()`에서 수행합니다.
 
-`CommitGraph.add`에서도 동일한 hash의 재등록을 검사합니다. 이 식별자는 실제 Git의 콘텐츠 기반 해시와 목적이 다르지만, 세션 내 유일성과 빠른 조회라는 명세는 충족합니다.
+```python
+commit = Commit(
+    hash=f"c{self._next_id:08x}",
+    message=message,
+    author=self.current_user,
+    timestamp=self._clock(),
+    parents=parents,
+)
+```
 
-**코드:** `_next_id`, `_create_commit`, `get_commit`, `CommitGraph.add`.
+`08x`는 카운터를 16진수로 표현하고 앞을 0으로 채워 최소 8자리로 만드는 형식입니다.
 
-**확인:** `test_hash_unique_across_reinitialization`, `test_hash_exhaustion_does_not_change_state`, `test_graph_rejects_invalid_links_before_mutating`.
+```text
+카운터 1  → c00000001
+카운터 2  → c00000002
+카운터 10 → c0000000a
+```
+
+객체를 등록한 뒤 카운터를 1 늘립니다. `INIT`에서도 카운터를 유지하며, 8자리 16진수의 최대값 `0xFFFFFFFF`를 넘으면 오류를 내서 ID 길이와 유일성을 지킵니다. `CommitGraph.add()`도 중복 ID 등록을 거부합니다.
+
+이 ID는 실제 Git처럼 파일 내용으로 계산한 해시가 아닙니다. 현재 프로그램에서 커밋을 구분하기 위한 식별자입니다. 시간은 `_clock()`이 반환한 UTC `datetime` 객체로 저장하며, 출력할 때 문자열로 바꿉니다.
+
+**코드 위치:** [repository.py](minigit/repository.py)의 `_create_commit()`, `get_commit()`; [models.py](minigit/models.py)의 `CommitGraph.add()`.
 
 ### 2.3 커밋이 추가될 때 역색인(author/keyword)을 어떤 시점에, 어떤 방식으로 갱신하도록 설계했는지 설명할 수 있는가?
 
-**답변:** 일반 커밋과 병합 커밋이 모두 `_create_commit`을 거칩니다. 커밋을 그래프와 커밋 저장소에 등록한 직후 `index.add(commit)`을 호출하고, 이어서 현재 브랜치의 HEAD를 이동합니다.
+**답변:** 일반 커밋과 병합 커밋 모두 `_create_commit()`에서 생성합니다. 생성 시 작성자와 메시지 단어별로 새 커밋 ID를 등록하므로, 다음 검색에서 바로 찾을 수 있습니다.
 
-역색인 갱신 과정은 다음과 같습니다.
+커밋 생성과 등록 순서는 다음과 같습니다.
 
-1. `authors[commit.author]` 집합에 새 hash를 추가합니다.
-2. 메시지에 `lower().split()`을 적용합니다.
-3. 같은 메시지의 중복 단어를 set으로 제거합니다.
-4. 각 토큰의 `keywords[token]` 집합에 새 hash를 추가합니다.
+```text
+Commit 객체 생성
+    → graph.add(commit): 부모·자식 연결 등록
+    → commits[commit.hash] = commit: 객체 보관
+    → index.add(commit): 검색 색인 갱신
+    → 현재 브랜치를 새 커밋으로 이동
+    → ID 카운터 증가
+```
 
-예를 들어 `Login LOGIN feature`는 `login`과 `feature` 두 토큰으로 색인됩니다. `login`의 목록에 같은 hash가 두 번 들어가지 않습니다. 다음 검색부터 갱신된 인덱스를 바로 사용하며, 검색할 때 인덱스를 다시 만들지 않습니다.
+역색인은 **검색어로 해당 커밋 ID들을 찾아가는 표**입니다. ID가 B, 작성자가 Bob Lee, 메시지가 `Login LOGIN feature`라면 다음 정보를 등록합니다.
 
-**코드:** [repository.py](minigit/repository.py)의 `_create_commit`, [index.py](minigit/index.py)의 `InvertedIndex.add`.
+```python
+authors["Bob Lee"] = {"B"}
+keywords["login"] = {"B"}
+keywords["feature"] = {"B"}
+```
 
-**확인:** `test_keyword_normalization_duplicates_and_punctuation`, `test_merge_has_two_parents_and_updates_index`.
+메시지는 소문자로 바꾸고 공백으로 나눈 뒤 집합으로 변환합니다. 같은 단어가 반복되어도 한 번만 처리하고, ID 집합에도 중복으로 저장하지 않습니다.
+
+실제 등록 코드는 다음과 같습니다.
+
+```python
+self.authors.setdefault(commit.author, set()).add(commit.hash)
+```
+
+`setdefault()`는 작성자 키가 있으면 기존 집합을 반환하고, 없으면 빈 집합을 저장한 뒤 반환합니다. 이어지는 `add()`가 그 집합에 새 ID를 넣습니다. 키워드 등록도 같은 방식입니다. 이 표는 커밋 생성 시 갱신하며 검색할 때마다 다시 만들지 않습니다.
+
+**코드 위치:** [repository.py](minigit/repository.py)의 `_create_commit()`; [index.py](minigit/index.py)의 `tokenize()`, `InvertedIndex.add()`.
 
 ### 2.4 LOG, PATH, ANCESTORS 에서 사용하는 그래프 탐색 로직을 어떻게 재사용 가능하게 구성했는지 설명할 수 있는가?
 
-**답변:** 그래프 알고리즘은 입출력이나 CLI 상태를 모르는 독립 함수로 분리했습니다. 모두 `CommitGraph`의 부모·자식 인접 목록을 받아 동작합니다.
+**답변:** 계산을 수행하는 알고리즘을 입력·출력과 분리된 함수로 만들었습니다. 필요한 연결 정보와 시작 ID만 전달하면 CLI 없이도 사용할 수 있습니다.
 
 | 기능 | 독립 함수 | 반환값 |
 | --- | --- | --- |
-| LOG | `topological_order(parents, children)` | 부모가 먼저인 hash 목록 |
-| PATH | `shortest_path(parents, children, start, end)` | 최단 경로 hash 목록 또는 `None` |
-| ANCESTORS | `ancestor_ids(parents, start)` | 중복 없는 조상 hash 목록 |
+| LOG | `topological_order(parents, children)` | 부모 우선 순서의 ID 리스트 |
+| PATH | `shortest_path(parents, children, start, end)` | 경로 ID 리스트 또는 `None` |
+| ANCESTORS | `ancestor_ids(parents, start)` | 정렬 전 조상 ID 리스트 |
 
-`CommitGraph`는 이 함수들을 호출하고, `Repository`는 hash를 커밋 정보로 바꾸거나 유효성을 검사합니다. CLI는 반환된 결과를 출력합니다. 따라서 CLI 없이도 작은 그래프를 만들어 알고리즘을 직접 테스트할 수 있습니다.
+각 파일이 맡는 일은 다음처럼 연결됩니다.
 
-**코드:** [algorithms.py](minigit/algorithms.py), [models.py](minigit/models.py)의 `CommitGraph`.
+```text
+cli.py         입력 해석, 결과를 문자열로 변환하고 출력
+    ↓
+repository.py  저장소 상태와 ID 유효성 확인, 필요한 객체 조회·정렬
+    ↓
+models.py      보관 중인 부모·자식 딕셔너리를 알고리즘에 전달
+    ↓
+algorithms.py  정렬·탐색 결과를 반환
+```
 
-**확인:** [test_algorithms.py](tests/test_algorithms.py)는 Repository나 REPL 없이 탐색 함수를 검증합니다.
+예를 들어 `LOG`의 알고리즘은 ID 목록을 반환하고, `Repository.log()`가 ID를 `Commit` 객체로 바꿉니다. CLI의 `_format_commits()`가 객체들을 표시용 문자열로 바꾼 뒤 `run_repl()`이 출력합니다.
+
+이렇게 분리하면 작은 그래프만 준비해서 알고리즘을 테스트하거나, 같은 저장소 기능에 다른 화면을 연결할 수 있습니다.
+
+**코드 위치:** [algorithms.py](minigit/algorithms.py), [models.py](minigit/models.py)의 `CommitGraph`, [repository.py](minigit/repository.py), [cli.py](minigit/cli.py).
 
 ### 2.5 주요 함수/클래스에 docstring/주석을 어떤 기준으로 작성했는지 설명할 수 있는가?
 
-**답변:** 함수와 클래스의 역할, 반환값과 중요한 규칙을 docstring으로 설명했습니다. 알고리즘에는 시간·공간복잡도와 선택 이유를 덧붙였습니다. 코드만 읽으면 놓치기 쉬운 불변 조건은 해당 위치에 주석으로 남겼습니다.
+**답변:** docstring에는 함수·클래스의 역할과 중요한 동작 규칙을 적고, 주석에는 코드만 보고 놓치기 쉬운 선택 이유를 적었습니다.
 
-예를 들어 병합 정렬에서는 **동률이면 왼쪽 원소를 먼저 선택해야 안정성이 유지된다**고 설명합니다. PATH에는 **남은 거리가 1씩 감소해야 최단 경로를 유지한다**는 조건을 남겼습니다. 초기화에는 **세션 내 ID 중복을 막기 위해 카운터를 유지한다**고 적었습니다.
+docstring은 `def`나 `class` 바로 아래의 설명 문자열입니다. 이 코드에서는 다음처럼 사용합니다.
 
-단순 대입을 다시 설명하기보다는, 왜 그 선택을 했는지와 어떤 동작을 보장하는지를 기록했습니다.
+| 위치 | 설명한 내용 | 필요한 이유 |
+| --- | --- | --- |
+| `Commit` | 생성 후 바뀌지 않는 커밋 정보 | 객체의 사용 규칙을 알 수 있음 |
+| `initialize()` | 이력은 지우지만 ID 카운터는 유지 | 초기화 후에도 ID가 재사용되지 않는 이유를 알 수 있음 |
+| `merge_sort()` | 동률이면 왼쪽을 먼저 선택 | 안정 정렬이 유지되는 이유를 알 수 있음 |
+| `shortest_path()` | 거리를 1씩 줄이며 작은 ID 선택 | 최단 거리와 사전순 동률 처리를 함께 이해할 수 있음 |
 
-**코드:** [algorithms.py](minigit/algorithms.py)의 각 함수, [models.py](minigit/models.py)의 `CommitGraph.add`, [repository.py](minigit/repository.py)의 `initialize`.
+단순히 대입문을 읽어주는 설명보다, **왜 이렇게 구현했고 어떤 조건을 지키는지**를 기록했습니다.
+
+**코드 위치:** [models.py](minigit/models.py), [repository.py](minigit/repository.py)의 `initialize()`, [algorithms.py](minigit/algorithms.py)의 각 함수와 내부 주석.
 
 ## 항목 3 — 알고리즘 이해
 
 ### 3.1 커밋 그래프가 왜 DAG여야 하는지, 사이클이 생기면 어떤 문제가 발생하는지 설명할 수 있는가?
 
-**답변:** 커밋의 부모는 그 커밋보다 먼저 존재한 이력입니다. 새 커밋은 이미 등록된 부모만 참조하고 기존 커밋의 부모를 바꾸지 않으므로, 부모를 계속 따라가며 자기 자신으로 돌아올 수 없습니다. 이처럼 방향이 있고 순환이 없는 그래프가 DAG입니다.
+**답변:** 커밋은 이미 존재하는 커밋을 부모로 연결합니다. 부모를 따라갔을 때 자기 자신으로 돌아오면 이력의 선후 관계가 모순되므로, 방향이 있고 순환이 없는 그래프인 DAG여야 합니다.
 
-브랜치가 나뉘고 병합되어도 부모는 항상 과거의 커밋이므로 DAG를 유지합니다. 병합이 만드는 마름모 모양은 무방향으로 보면 순환 경로가 있지만, 부모 방향을 따라 돌아오는 **방향성 사이클**은 없습니다.
+`A → B`는 A가 부모이고 B가 자식이라는 뜻입니다. 여기에 `B → A`까지 있다면 A와 B가 서로의 조상이 되어, 둘 다 상대보다 먼저 나와야 하는 문제가 생깁니다. 이런 방향성 순환을 사이클이라고 합니다.
 
-사이클이 있다면 A가 B보다 먼저, 동시에 B가 A보다 먼저 출력되어야 하는 모순이 생겨 위상 정렬을 완성할 수 없습니다. 방문 검사가 없는 조상 탐색은 무한 반복할 수도 있습니다. 방문 검사가 있어도 잘못된 이력 관계 자체는 해결되지 않습니다.
+병합 자체는 사이클이 아닙니다.
 
-구현에서는 새 노드의 부모가 모두 기존 노드인지 검사합니다. Kahn 알고리즘도 출력한 노드 수가 전체보다 작으면 사이클 오류를 냅니다.
+```text
+A → B → D
+A → C → D
+```
 
-**코드·확인:** `CommitGraph.add`, `topological_order`, `test_cycle_detected`, `test_graph_rejects_invalid_links_before_mutating`.
+그림이 두 갈래로 갈라졌다 합쳐져도, 화살표를 따라 D에서 A로 돌아올 수는 없습니다. `PATH`가 연결을 양방향으로 해석하는 것과 커밋 그래프의 방향성은 구분해야 합니다.
+
+`CommitGraph.add()`는 새 ID와 이미 존재하는 부모만 연결하고, 기존 커밋의 부모를 바꾸지 않습니다. 이 추가 방식으로 DAG를 유지합니다. 위상 정렬도 모든 노드를 처리하지 못하면 사이클 오류를 냅니다. 방문 검사가 없는 조상 탐색이라면 사이클에서 무한 반복할 수도 있습니다.
+
+**코드 위치:** [models.py](minigit/models.py)의 `CommitGraph.add()`; [algorithms.py](minigit/algorithms.py)의 `topological_order()`.
 
 ### 3.2 LOG 에서 "부모가 먼저" 조건을 만족시키기 위해 어떤 접근(예: 위상 정렬 성격의 출력)을 적용했는지 설명할 수 있는가?
 
-**답변:** Kahn 위상 정렬을 적용했습니다. 부모에서 자식으로 향하는 관계를 기준으로, 각 커밋의 아직 처리되지 않은 부모 수를 진입 차수로 사용합니다.
+**답변:** Kahn 위상 정렬을 사용했습니다. 아직 처리하지 않은 부모 수가 0인 커밋만 큐에 넣고, 하나를 처리할 때마다 자식들의 남은 부모 수를 줄입니다.
 
-1. 각 커밋의 진입 차수를 부모 수로 설정합니다.
-2. 부모가 없는 커밋을 deque에 넣습니다.
-3. 큐에서 커밋 하나를 꺼내 출력 순서에 추가합니다.
-4. 그 커밋의 자식들에게 남은 부모 수를 1씩 줄입니다.
-5. 남은 부모 수가 0이 된 자식을 큐에 넣습니다.
+위상 정렬은 **그래프의 선후 관계를 지키도록 노드를 나열하는 것**입니다. 여기서는 부모 → 자식 관계를 지킵니다.
 
-두 부모를 가진 병합 커밋은 두 부모가 모두 처리돼야 큐에 들어갑니다. 그래서 timestamp나 브랜치 이름에 의존하지 않고 부모 선행 조건을 보장합니다.
+부모 수는 생성 시 기록한 부모 튜플의 길이로 바로 알 수 있습니다.
 
-커밋 수를 `V`, 부모 연결 수를 `E`라고 하면 각 노드와 간선을 한 번씩 처리하므로 시간은 **`O(V + E)`**, 그래프를 제외한 추가 공간은 **`O(V)`**입니다.
+```python
+indegree = {node: len(links) for node, links in parents.items()}
+# 기본 예제: {"A": 0, "B": 1, "C": 1, "D": 2}
+```
 
-**코드·확인:** `topological_order`, `test_topological_order_respects_every_parent`.
+`indegree`는 처음에는 전체 부모 수이고, 처리 중에는 아직 처리하지 않은 부모 수입니다. 원본 `parents`는 바꾸지 않습니다.
+
+```python
+ready = deque(node for node, degree in indegree.items() if degree == 0)
+```
+
+이 한 줄은 길게 쓰면 다음과 같습니다.
+
+```python
+ready = deque()
+for node, degree in indegree.items():
+    if degree == 0:
+        ready.append(node)
+```
+
+`deque`를 큐로 사용해 `append()`로 뒤에 넣고 `popleft()`로 앞에서 꺼냅니다. 먼저 들어간 커밋이 먼저 처리됩니다.
+
+| 꺼낸 커밋 | 자식의 미처리 부모 수 변경 | 처리 후 큐 | 결과 |
+| --- | --- | --- | --- |
+| 초기 상태 | A만 부모 수 0 | `[A]` | `[]` |
+| A | B: 1→0, C: 1→0 | `[B, C]` | `[A]` |
+| B | D: 2→1 | `[C]` | `[A, B]` |
+| C | D: 1→0 | `[D]` | `[A, B, C]` |
+| D | 자식 없음 | `[]` | `[A, B, C, D]` |
+
+루트가 여러 개면 처음부터 여러 커밋이 큐에 들어갑니다. 전체 커밋 수를 `V`, 부모 연결 수를 `E`라고 하면 각각을 한 번씩 처리하므로 시간은 `O(V + E)`, 기존 그래프를 제외한 추가 공간은 `O(V)`입니다.
+
+**코드 위치:** [algorithms.py](minigit/algorithms.py)의 `topological_order()`.
 
 ### 3.3 PATH 에서 최단 경로를 찾기 위해 어떤 알고리즘(예: BFS)을 선택했고, 간선을 무방향으로 정의한 이유를 설명할 수 있는가?
 
-**답변:** 모든 간선의 비용이 1이므로 BFS를 선택했습니다. BFS는 가까운 노드부터 층별로 방문해 최소 간선 수를 계산합니다. 간선을 무방향으로 보는 것은 명세의 정의이며, 부모와 자식 양쪽으로 이동해 서로 다른 브랜치의 커밋도 연결할 수 있습니다.
+**답변:** 연결 하나를 건너는 비용이 모두 같으므로 가까운 노드부터 탐색하는 BFS를 사용했습니다. 경로에서 부모·자식 양쪽 이동을 허용하므로 서로 다른 브랜치의 커밋 사이도 이동할 수 있습니다.
 
-동률 규칙까지 보장하기 위해 다음 두 단계를 사용합니다.
+예를 들어 B에서 C로 가려면 `B → A → C`처럼 부모로 올라갔다가 자식으로 내려갈 수 있어야 합니다. 목적지가 부모인지 자식인지 모르는 상황 때문만이 아니라, **이 기능의 이동 규칙 자체가 양방향**이기 때문입니다.
 
-1. **목적지에서 BFS:** 각 커밋에서 목적지까지의 최단 거리를 기록합니다.
-2. **시작점에서 경로 복원:** 이웃 중 거리가 정확히 1 작은 노드만 후보로 삼고, 그중 hash가 가장 작은 노드를 선택합니다.
+부모와 자식을 합쳐 이웃으로 사용합니다.
 
-거리를 1씩 줄이므로 경로 길이는 항상 최단입니다. 모든 hash가 같은 길이이므로, 경로가 처음 갈라지는 위치에서 작은 hash를 고르면 전체 `hash1->hash2->...` 문자열도 가장 작습니다. 방문 순서나 set의 순서에 결과가 좌우되지 않습니다.
+```python
+for neighbor in (*parents[node], *children[node]):
+```
 
-부모와 자식 인접 목록을 함께 보관하기 때문에 이웃을 찾기 위해 전체 커밋을 순회하지 않습니다. 시간복잡도는 **`O(V + E)`**, 추가 공간은 **`O(V)`**입니다. 실제로는 목적지와 연결된 부분을 탐색합니다.
+`*`는 내부 원소를 펼칩니다. B의 부모가 `(A,)`, 자식이 `[D]`이면 이웃은 `(A, D)`입니다.
 
-**코드·확인:** `shortest_path`, `test_lexicographically_smallest_shortest_path`, `test_path_uses_edges_in_both_directions`, `test_path_lexicographic_tie_in_both_directions`.
+실제 알고리즘은 두 단계입니다.
+
+1. **목적지 `end`부터 BFS:** 각 커밋에서 목적지까지의 최소 이동 횟수를 기록합니다.
+2. **출발점 `start`에서 경로 만들기:** 거리가 1 작은 이웃으로 이동하고, 후보가 여러 개면 가장 작은 ID를 고릅니다.
+
+B에서 C로 가는 예에서, C부터 BFS하면 다음 거리를 얻습니다.
+
+| 커밋 | C까지의 거리 |
+| --- | --- |
+| C | 0 |
+| A | 1 |
+| D | 1 |
+| B | 2 |
+
+B에서는 거리 1인 A와 D가 후보입니다. 더 작은 ID인 A를 선택하고, A에서는 거리 0인 C를 선택해 `B → A → C`를 만듭니다. BFS 큐는 한 단계 가까운 노드를 먼저 처리하므로 처음 기록한 거리가 최단 거리입니다.
+
+거리를 1씩 줄여 최단 경로를 지키고, 같은 거리 후보에서 작은 ID를 골라 동률을 처리합니다. 현재 ID는 길이가 고정되어 있으므로 이 선택이 전체 경로 문자열의 사전순 비교와 맞습니다. 출발점이 거리 표에 없으면 목적지와 연결되지 않았으므로 `None`을 반환합니다.
+
+시간은 `O(V + E)`, 추가 공간은 `O(V)`입니다. 실제 탐색 범위는 목적지와 연결된 부분입니다.
+
+**코드 위치:** [algorithms.py](minigit/algorithms.py)의 `shortest_path()`.
 
 ### 3.4 정렬 알고리즘의 평균/최악 시간복잡도와 안정 정렬 여부를 설명할 수 있는가?
 
-**답변:** 반복형 병합 정렬을 직접 구현했습니다. 길이 1인 구간부터 시작해 정렬된 두 구간을 병합하고, 구간 크기를 2·4·8·…로 늘립니다. 재귀나 표준 정렬 API는 사용하지 않습니다.
+**답변:** 직접 구현한 반복형 병합 정렬을 사용합니다. 평균·최악 시간은 모두 `O(n log n)`이고, 비교 값이 같은 원소의 기존 순서를 유지하는 안정 정렬입니다.
 
-| 성질 | 내용 |
+원소 하나짜리 구간은 이미 정렬되었다고 보고, 두 구간씩 합칩니다.
+
+```text
+입력:          [4] [1] [3] [2]
+길이 1씩 병합: [1, 4] [2, 3]
+길이 2씩 병합: [1, 2, 3, 4]
+```
+
+마지막 단계에서 `[1, 4]`와 `[2, 3]`을 합칠 때는 각 구간의 맨 앞에 남은 값끼리 비교합니다.
+
+```text
+1과 2 비교 → 1 선택
+4와 2 비교 → 2 선택
+4와 3 비교 → 3 선택
+오른쪽이 비었으므로 남은 4 선택
+```
+
+`source`는 읽을 리스트, `target`은 결과를 쓸 리스트, `width`는 구간 길이입니다. 한 단계가 끝나면 두 리스트의 역할을 바꾸고 `width`를 2배로 늘립니다. 입력을 새 리스트로 복사하므로 원본 입력은 변경하지 않습니다.
+
+핵심 비교는 `key(source[left]) <= key(source[right])`입니다. `key`는 비교할 값을 얻는 함수입니다. `lambda commit: commit.author`라면 작성자를 비교합니다. `<=`이므로 값이 같을 때 왼쪽 원소를 먼저 선택해 기존 순서를 유지합니다. 날짜·작성자 로그에서는 생성 순서대로 입력하므로 동률일 때 생성 순서도 유지됩니다.
+
+| 성질 | 현재 구현 |
 | --- | --- |
-| 평균 시간 | `O(n log n)` |
-| 최악 시간 | `O(n log n)` |
-| 최선 시간 | 현재 구현에서도 `O(n log n)` |
+| 평균·최악·최선 시간 | `O(n log n)` |
 | 추가 공간 | `O(n)` |
-| 안정성 | 안정 정렬 |
-| 입력 변경 | 원본 입력을 변경하지 않음 |
+| 안정성 | 같은 비교 값이면 입력 순서 유지 |
+| 정렬 API | `sorted()`와 `list.sort()`를 사용하지 않음 |
 
-각 단계에서 전체 원소를 한 번씩 처리하며 단계 수는 약 `log₂ n`입니다. 같은 키를 비교할 때 왼쪽 구간의 원소를 먼저 선택하므로 원래 순서를 유지합니다. Repository는 커밋 생성 순서대로 정렬 입력을 구성하므로 날짜나 작성자가 같으면 생성 순서가 유지됩니다.
+각 단계에서 전체 원소를 처리하고, 구간 길이가 1·2·4·8로 증가하므로 단계 수는 약 `log₂ n`입니다. 그래서 전체 시간이 `O(n log n)`입니다.
 
-`key` 함수만 바꿔 timestamp·author·hash 정렬에 같은 알고리즘을 재사용합니다.
-
-**코드·확인:** `merge_sort`, `test_stability_and_input_unchanged`, `test_all_permutations_of_six_values`, `test_no_standard_sort_api_used_in_implementation`.
+**코드 위치:** [algorithms.py](minigit/algorithms.py)의 `merge_sort()`; [repository.py](minigit/repository.py)의 `log()`, `ancestors()`, `search()`.
 
 ### 3.5 역색인이 순회 검색보다 빠른 이유를, 자료구조/시간복잡도 관점에서 설명할 수 있는가?
 
-**답변:** 순회 검색은 검색할 때마다 모든 커밋의 메시지나 작성자를 확인합니다. 역색인은 커밋을 만들 때 미리 **검색어 → 그 검색어가 있는 커밋 hash 집합**을 기록합니다. 검색할 때는 dict에서 해당 집합을 바로 찾고, 결과에 해당하는 커밋만 조회합니다.
+**답변:** 전체 커밋을 검색할 때마다 읽는 대신, 커밋 생성 시 단어·작성자별 ID 집합을 미리 만들어 둡니다. 검색할 때는 해당 후보만 가져오므로, 결과가 적을수록 전체 순회보다 유리합니다.
 
-예를 들어 커밋 10,000개 중 `login`이 3개에만 있다면, 검색 결과를 만들기 위해 10,000개를 훑지 않고 그 3개만 가져옵니다.
+커밋 10,000개 중 `login`이 있는 커밋이 3개라면, 색인에서 그 3개의 ID를 찾아 해당 커밋만 조회합니다. 다만 결과 복사와 정렬도 필요하므로 검색 전체가 `O(1)`은 아닙니다.
 
-전체 커밋 수를 `V`, 결과 수를 `k`라고 할 때 일반적인 평균 복잡도는 다음과 같습니다. 문자열을 읽고 정규화하는 비용은 별도로 필요합니다.
+여러 단어를 검색할 때는 모든 단어가 있는 커밋을 찾기 위해 집합의 **교집합**을 구합니다.
 
-| 방식 | 후보 찾기·가져오기 | 현재 구현의 결과 정렬까지 포함 |
+```python
+login = {"A", "B", "C"}
+feature = {"A", "C"}
+
+result = feature.copy()
+result.intersection_update(login)
+# result: {"A", "C"}
+```
+
+`intersection_update()`는 상대 집합에도 있는 원소만 남기도록 현재 집합을 수정합니다. 상대 집합은 바꾸지 않고, 반환값은 `None`입니다. 따라서 `result = result.intersection_update(...)`라고 쓰면 안 됩니다.
+
+실제 코드에서는 가장 작은 집합을 복사해 시작합니다.
+
+```python
+smallest = min(buckets, key=len)
+result = smallest.copy()
+```
+
+검색 단어별 후보 수가 100,000개·90,000개·2개라면 최종 결과는 반드시 마지막 2개 안에 있습니다. 작은 집합부터 시작하면 2개만 복사하고 중간 후보도 최대 2개로 유지합니다. 어느 집합부터 시작해도 교집합 결과는 같지만, 복사량과 중간 후보 크기를 줄일 수 있습니다. 결과가 비면 더 계산해도 비어 있으므로 반복을 멈춥니다.
+
+전체 커밋 수를 `V`, 최종 결과 수를 `k`라고 할 때 평균적인 비용은 다음과 같습니다. 검색 문자열을 읽고 토큰으로 나누는 비용은 별도입니다.
+
+| 방식 | 후보 찾기와 가져오기 | 결과 정렬까지 포함 |
 | --- | --- | --- |
-| 전체 작성자 순회 | `O(V)` | 결과 정렬 시 `O(V + k log k)` |
-| 전체 메시지 순회 | 모든 메시지의 총 길이에 비례 | 전체 순회 비용 + `O(k log k)` |
-| 단일 토큰/작성자 역색인 | dict 조회 평균 `O(1)`, 집합 복사·커밋 조회 `O(k)` | `O(k + k log k)` |
+| 작성자 전체 순회 | `O(V)` | `O(V + k log k)` |
+| 메시지 전체 순회 | 전체 메시지 길이에 비례 | 전체 순회 비용 + `O(k log k)` |
+| 단일 단어·작성자 역색인 | 딕셔너리 조회 평균 `O(1)`, 결과 복사·조회 `O(k)` | `O(k + k log k)` |
 
-여러 단어는 각 토큰의 집합을 가져와 가장 작은 집합부터 교집합을 계산합니다. 단어 수가 `m`, 가장 작은 후보 집합의 크기가 `s`라면 평균적인 교집합 작업의 상한은 `O(m × s)`이며, 이후 결과를 정렬합니다.
+여러 단어는 단어 수가 `m`, 가장 작은 집합 크기가 `s`라면 집합 조회·최소 집합 선택에 `O(m)`, 평균적인 교집합 작업에 최대 `O(m × s)`가 필요하고, 이후 결과를 정렬합니다. 집합 연산과 딕셔너리 조회의 일반적인 평균 비용을 전제로 한 설명입니다.
 
-결과가 전체 커밋에 가까우면 역색인의 이득도 작아집니다. 빠른 검색을 위해 인덱스를 저장하는 메모리와 커밋 생성 시 토큰화 비용을 지불하는 구조입니다. 검색 전체를 무조건 `O(1)`이라고 부를 수는 없습니다.
+색인은 추가 메모리와 생성 시 갱신 비용을 사용합니다. 결과가 전체 커밋만큼 많으면 이득이 줄며, 작은 집합을 고른다고 모든 검색이 반드시 더 빨라지는 것은 아닙니다.
 
-**코드·확인:** `InvertedIndex`, `Repository.search`. `test_search_does_not_scan_all_commits`는 커밋 dict의 전체 순회 메서드가 호출되면 실패하도록 만들어 실제 순회 여부를 검증합니다.
+**코드 위치:** [index.py](minigit/index.py)의 `InvertedIndex`, [repository.py](minigit/repository.py)의 `search()`.
 
 ## 항목 4 — 확장과 변경 대응
 
+이 항목은 현재 동작과 **요구사항이 바뀌었을 때의 개선 제안**을 구분합니다. 아래 제안은 아직 구현한 기능이 아닙니다.
+
 ### 4.1 커밋 수가 10배 늘어났을 때 병목이 될 지점을 예측하고, 개선 방향(자료구조/알고리즘)을 설명할 수 있는가?
 
-**답변:** 현재 CLI는 커밋당 부모가 최대 2개이므로 간선 수도 커밋 수에 비례합니다. 메시지 길이가 비슷하다는 가정에서는 다음 지점이 커집니다.
+**답변:** 전체 커밋을 탐색·정렬·출력하는 작업과 메모리 사용량이 커집니다. 먼저 측정으로 병목을 찾고, 출력 제한·캐시·탐색 범위 축소를 적용하겠습니다.
 
-| 작업 | 현재 비용 | 10배 증가 시 예상 | 개선 방향 |
-| --- | --- | --- | --- |
-| 기본 LOG | `O(V + E)` + 출력 | 탐색·출력량 약 10배 | 결과 스트리밍, 출력 페이지 나누기 |
-| PATH | `O(V + E)` | 연결된 그래프가 커지면 약 10배 | 거리 계산 조기 종료, 반복 질의 캐시, 양방향 BFS |
-| 날짜/작성자 LOG | `O(V log V)` | 보통 10배보다 더 증가 | 변경 없을 때 정렬 결과 재사용 |
-| ANCESTORS | `O(A + Eₐ)` + `O(A log A)` 정렬 | 조상 수에 따라 증가 | 필요한 출력량 제한, 자주 조회하는 조상 결과 캐시 |
-| SEARCH | 후보 크기·결과 수에 비례 | 희귀 토큰은 영향 작고 흔한 토큰은 큼 | 결과 페이지 나누기, 큰 posting 집합 표현 개선 |
-| 메모리 | 그래프·커밋·인덱스 전체 | 비슷한 데이터면 약 10배 | 내부 정수 ID, 압축된 posting 목록, 영속 저장 구조 검토 |
+현재 CLI로 만드는 커밋은 부모가 최대 2개이므로 연결 수도 커밋 수에 비례합니다. 메시지 길이가 비슷하다면 다음을 예상할 수 있습니다.
 
-여기서 `A`는 해당 커밋의 조상 수, `Eₐ`는 그 조상 탐색에서 방문한 간선 수입니다. 출력해야 할 결과 자체가 10배면 출력 시간은 알고리즘만으로 없앨 수 없습니다.
+| 작업 | 증가할 수 있는 비용 | 개선 방향 |
+| --- | --- | --- |
+| 기본 LOG | `O(V + E)` 탐색과 전체 결과 출력 | 결과를 나눠 보여 주거나 순차 출력 |
+| PATH | 연결된 그래프 전체의 `O(V + E)` 탐색 | 거리 계산 조기 종료, 반복 질의 캐시, 양방향 BFS 검토 |
+| 날짜·작성자 LOG | `O(V log V)` 정렬 | 변경이 없으면 정렬 결과 재사용 |
+| ANCESTORS | 조상 탐색과 조상 ID 정렬 | 결과 제한, 자주 조회하는 결과 캐시 |
+| SEARCH | 흔한 단어의 큰 후보 집합과 결과 정렬 | 결과를 나눠 보여 주기, 큰 집합 저장 방식 개선 |
+| 메모리 | 커밋 객체·연결·색인 모두 저장 | 내부 정수 ID, 압축된 ID 목록, 디스크 저장 검토 |
 
-양방향 BFS로 PATH를 개선할 경우 첫 만남에서 무조건 종료하면 사전순 동률 규칙을 놓칠 수 있습니다. 필요한 거리 정보를 확보한 뒤 같은 규칙으로 경로를 복원해야 합니다. 캐시는 커밋 추가·INIT 시 갱신하거나 무효화해야 합니다.
+커밋이 10배가 되어도 메시지 길이와 연결 수 비율이 비슷하다면, 선형 탐색 비용과 메모리 사용량은 대략 10배가 됩니다. 전체 정렬 비용은 보통 10배보다 더 증가합니다. 반면 희귀 단어 검색은 결과 수가 그대로라면 영향이 작을 수 있습니다. 출력할 결과 자체가 많아지는 비용은 탐색 개선만으로 없앨 수 없습니다.
 
-개선 우선순위는 먼저 실제 크기의 데이터로 시간·메모리를 측정하고, 병목이 출력인지 탐색인지 정렬인지 확인한 뒤 정합니다. 위 내용은 확장 설계 제안이며 현재 구현에 추가한 기능은 아닙니다.
+캐시를 넣으면 커밋 추가·`INIT` 시 갱신하거나 무효화해야 합니다. 양방향 BFS도 처음 만난 경로만 반환하면 기존 사전순 동률 규칙을 놓칠 수 있어, 필요한 거리 정보와 경로 복원 규칙을 함께 검토해야 합니다.
+
+**관련 코드:** [repository.py](minigit/repository.py)의 `log()`, `path()`, `ancestors()`, `search()`; [algorithms.py](minigit/algorithms.py); [index.py](minigit/index.py).
 
 ### 4.2 PATH 의 간선 정의를 "부모 방향만 허용"으로 바꾸면 결과가 어떻게 달라지고, 구현은 무엇을 바꿔야 하는지 설명할 수 있는가?
 
-**답변:** 출발 커밋에서 조상 쪽으로만 이동할 수 있습니다. 예제의 `c00000002 → c00000003`은 공통 부모에서 다른 자식으로 내려가야 하므로 `No path`가 됩니다. 반대로 `c00000004 → c00000001`은 부모를 따라갈 수 있어 경로가 있습니다. 부모에서 자식으로 향하는 `c00000001 → c00000004`는 경로가 없습니다.
+**답변:** 출발 커밋에서 조상 쪽으로만 이동할 수 있게 됩니다. 현재의 양방향 탐색을 바꾸되, 목적지에서 거리를 구하는 단계와 출발점에서 경로를 만드는 단계의 방향을 다르게 적용해야 합니다.
 
-현재 구현은 **목적지에서 BFS**를 하기 때문에 두 부분을 구분해서 바꿔야 합니다.
+기본 예제에서는 다음과 같이 달라집니다.
 
-- 목적지에서 거리 계산을 할 때는 허용된 간선의 역방향인 **children**만 따라갑니다. 그래야 어떤 노드가 부모 방향으로 목적지에 도달할 수 있는지 알 수 있습니다.
-- 시작점에서 경로를 복원할 때는 허용된 정방향인 **parents**만 후보로 선택합니다. 거리가 1 감소하는 후보 중 가장 작은 hash를 고릅니다.
+| 경로 | 부모 방향만 허용할 때 | 이유 |
+| --- | --- | --- |
+| B → C | `No path` | A로 올라간 뒤 다른 자식 C로 내려갈 수 없음 |
+| D → A | 경로 있음 | 부모를 따라 D → B → A 또는 D → C → A |
+| A → D | `No path` | 자식 방향으로 내려가야 함 |
 
-목적지에서 시작하는 BFS까지 parents로 바꾸면 출발점에서 도달 가능한 조상을 찾는 문제와 방향이 뒤집힙니다. 이 부분이 변경 시 주의할 점입니다. 대안으로 출발점에서 parents만 따라 BFS하는 방식으로 다시 구성할 수도 있습니다.
+현재 코드는 목적지에서 BFS하므로 수정 위치를 구분해야 합니다.
 
-**변경 위치:** [algorithms.py](minigit/algorithms.py)의 `shortest_path` 안에 있는 BFS 이웃 선택과 경로 복원 후보 선택.
+| 단계 | 현재 코드의 이웃 | 변경 후 이웃 |
+| --- | --- | --- |
+| 목적지에서 거리 계산 | 부모 + 자식 | `children`만 사용 |
+| 출발점에서 경로 생성 | 부모 + 자식 | `parents`만 사용 |
+
+예를 들어 D에서 A로 올라가는 거리를 계산하려면, 목적지 A에서 역으로 자식 B·C·D를 찾아야 합니다. 이후 출발점 D에서는 실제 허용 방향인 부모 쪽으로 이동합니다.
+
+두 곳을 모두 `parents`로 바꾸면 원하는 방향의 거리가 계산되지 않습니다. 대안으로 출발점에서 부모만 따라 BFS하도록 전체 경로 탐색을 다시 구성할 수 있지만, 사전순 동률 처리도 함께 유지해야 합니다.
+
+**변경 위치:** [algorithms.py](minigit/algorithms.py)의 `shortest_path()` 안 BFS 이웃 선택과 경로 복원 후보 선택.
 
 ### 4.3 LOG --sort-by=author 요구사항이 "부모-자식 선후도 유지"로 강화된다면, 어떤 전략으로 해결할지 설명할 수 있는가?
 
-**답변:** 위상 정렬에서 **현재 출력 가능한 커밋 중 작성자가 가장 앞선 커밋**을 선택하도록 바꿉니다. 부모가 전부 처리된 커밋만 후보에 넣고, 후보 선택 기준을 `(author, hash)`로 두면 부모 선행 조건과 결정적인 동률 처리를 함께 만족시킬 수 있습니다.
+**답변:** 부모가 모두 처리된 커밋만 후보로 두고, 그중 작성자 이름이 가장 앞선 커밋을 선택하는 위상 정렬로 바꾸겠습니다.
 
-1. Kahn 알고리즘처럼 부모 수를 계산합니다.
-2. 부모 수가 0인 커밋을 후보 집합에 넣습니다.
-3. 후보 중 작성자 이름이 가장 작은 커밋을 출력합니다.
-4. 자식의 남은 부모 수를 줄이고, 0이 되면 후보에 넣습니다.
+단순히 작성자로 전체 정렬하면 부모보다 자식이 먼저 나올 수 있습니다. 예를 들어 부모 작성자가 Zoe이고 자식 작성자가 Alice라면, 작성자 오름차순과 부모 우선 조건을 동시에 전역적으로 지킬 수는 없습니다.
 
-표준 정렬 API 금지 조건을 유지한다면 **최소 힙을 직접 구현**해 후보를 관리할 수 있습니다. 각 노드는 힙에 한 번 들어갔다가 나오므로 시간은 `O(E + V log V)`입니다. 학습용으로 후보 목록에서 매번 최솟값을 찾는 방법도 가능하지만, 최악에는 `O(V² + E)`이므로 규모가 커질 때 불리합니다.
+따라서 규칙을 **부모 우선 조건을 먼저 지키고, 동시에 출력 가능한 후보 사이에서 작성자 순서를 적용한다**고 정해야 합니다.
 
-전역 작성자 오름차순을 항상 만족시키는 것은 불가능합니다. 예를 들어 부모가 `Zoe`, 자식이 `Alice`라면 부모 선행 조건상 Zoe가 먼저 나와야 합니다. 따라서 강화된 규칙은 **부모 제약을 우선하고, 동시에 출력 가능한 커밋 사이에서 작성자 순서를 적용한다**고 정의해야 합니다.
+1. Kahn 알고리즘처럼 미처리 부모 수를 계산합니다.
+2. 부모 수가 0인 커밋을 후보에 넣습니다.
+3. 후보 중 `(author, hash)`가 가장 작은 커밋을 선택합니다.
+4. 자식의 남은 부모 수를 줄이고, 0이 된 자식을 후보에 추가합니다.
 
-현재의 author 로그는 전체 커밋을 병합 정렬합니다. 위 전략을 적용하려면 `Repository.log`의 author 분기를 작성자 우선 위상 정렬 함수 호출로 바꿉니다.
+작성자가 같으면 ID로 동률을 처리합니다. 현재 카운터 ID에서는 생성 순서와도 일치합니다.
+
+후보의 최솟값을 빠르게 꺼내기 위해 최소 힙을 직접 구현할 수 있습니다. 시간은 `O(E + V log V)`입니다. 후보 리스트를 매번 순회해 최솟값을 고르는 방법도 있지만, 최악에는 `O(V² + E)`로 커집니다.
+
+**변경 위치:** [repository.py](minigit/repository.py)의 `log()`에서 author 분기를 새 작성자 우선 위상 정렬 함수로 연결하고, [algorithms.py](minigit/algorithms.py)에 후보 관리 로직을 추가합니다.
 
 ### 4.4 해시 생성 방식을 카운터 기반 ↔ 난수 기반으로 바꿀 때 테스트/재현성/디버깅에 미치는 영향을 설명할 수 있는가?
 
-**답변:** 카운터는 같은 명령 순서에서 같은 ID가 나오므로 테스트와 예제 재현이 쉽습니다. 난수는 ID 생성 순서가 드러나지 않는 장점이 있지만, 충돌 검사와 테스트 제어가 추가로 필요합니다.
+**답변:** 카운터는 같은 명령 순서에서 같은 ID를 만들어 재현과 디버깅이 쉽습니다. 난수는 ID가 실행마다 달라질 수 있으므로 충돌 처리와 테스트용 생성기 제어가 필요합니다.
 
-| 관점 | 카운터 기반 | 난수 기반 |
+| 관점 | 현재 카운터 방식 | 난수 방식으로 바꿀 경우 |
 | --- | --- | --- |
-| 유일성 | 카운터 유지·최대값 검사로 보장 | 이미 사용한 ID인지 검사하고 충돌 시 다시 생성 |
-| 테스트 | 예상 hash를 직접 쓸 수 있음 | 생성기를 주입하거나 테스트용 고정 시퀀스 사용 |
-| 재현성 | 명령 순서가 같으면 hash도 같음 | 고정된 생성 조건 없이는 hash가 달라짐 |
-| 디버깅 | ID로 생성 순서 파악이 쉬움 | ID와 사건을 연결해 별도 기록하는 편이 좋음 |
-| PATH 동률 | 생성 순서와 hash 사전순이 함께 증가 | 그래프가 같아도 새 ID에 따라 선택 경로가 달라질 수 있음 |
+| 중복 방지 | 카운터 유지와 최대값 검사 | 사용한 ID인지 검사하고 충돌 시 재시도 |
+| 테스트 | 예상 ID를 직접 작성 가능 | 고정된 ID 시퀀스를 반환하는 생성기 주입 |
+| 재현성 | 같은 명령 순서면 같은 ID | 생성 조건을 제어하지 않으면 달라짐 |
+| 디버깅 | ID로 생성 순서를 파악하기 쉬움 | ID와 작업 순서를 별도로 기록하는 편이 좋음 |
+| PATH 동률 | 현재 ID는 생성 순서대로 증가 | 그래프 구조가 같아도 ID에 따라 선택 경로가 달라질 수 있음 |
 
-난수로 바꿀 때는 hash 생성기를 Repository에 주입하고, **세션 전체에서 사용한 ID 집합**을 유지하겠습니다. `INIT`으로 커밋 저장소가 비워져도 이전 ID와 중복되지 않아야 하기 때문입니다. 테스트용 생성기는 의도적으로 충돌하는 값을 반환하게 해 재시도와 상태 유지도 검증할 수 있습니다.
+생성기는 현재의 `_clock`처럼 함수로 주입할 수 있습니다. 테스트에서는 의도적으로 중복 ID를 반환하게 해서 충돌 시 재시도와 상태 유지도 확인할 수 있습니다.
 
-현재 PATH의 사전순 선택 증명을 유지하려면 난수 ID도 같은 길이로 만듭니다. 길이가 달라지는 ID를 허용하면 다음 hash 비교와 전체 경로 문자열 비교가 항상 같지는 않으므로 동률 처리도 다시 검토해야 합니다.
+`INIT` 이후에도 같은 세션의 ID를 재사용하지 않으려면, 현재 커밋 딕셔너리뿐 아니라 세션 전체에서 사용한 ID 집합을 유지해야 합니다. 현재 PATH의 사전순 선택 규칙을 그대로 쓰려면 난수 ID도 고정 길이로 만들겠습니다.
 
-난수 구현에서 카운터로 돌아오면 hash의 고정 길이·증가·최대값 동작을 다시 테스트합니다. 두 방식 모두 시간은 별도 문제이므로, 완전히 같은 출력이 필요한 테스트에서는 현재처럼 시계도 주입해 timestamp를 고정합니다.
+반대로 카운터 방식으로 돌아오면 시작값·증가·최대값·재초기화 후 비재사용을 다시 검증합니다. ID를 고정해도 시각은 바뀔 수 있으므로, 완전히 같은 출력이 필요한 테스트에서는 시계 함수도 고정해야 합니다.
+
+**변경 위치:** [repository.py](minigit/repository.py)의 `__init__()`, `_create_commit()`, `initialize()`; ID를 직접 기대하는 테스트와 예제 명령 파일.
+
+## 부록 A — 코드에서 낯설 수 있는 Python 표현
+
+### 타입 힌트와 실제 부모·자식 자료구조
+
+```python
+self.parents: dict[str, tuple[str, ...]] = {}
+self.children: dict[str, list[str]] = {}
+```
+
+실제로는 둘 다 딕셔너리입니다. 부모 값은 튜플, 자식 값은 리스트입니다. 기본 예제를 A·B·C·D로 표현하면 다음과 같습니다.
+
+```python
+parents = {"A": (), "B": ("A",), "C": ("A",), "D": ("C", "B")}
+children = {"A": ["B", "C"], "B": ["D"], "C": ["D"], "D": []}
+```
+
+각 노드에 연결된 노드 목록을 저장하는 방식을 **인접 목록**이라고 합니다. 새 커밋을 추가하면 그 커밋의 부모를 등록하고, 각 부모의 자식 리스트에도 새 ID를 추가합니다.
+
+알고리즘의 `Mapping[str, Sequence[str]]`는 이 구조를 더 일반적으로 표현한 타입 힌트입니다.
+
+| 표현 | 뜻 | 우리 코드의 실제 값 |
+| --- | --- | --- |
+| `Mapping` | 키로 값을 조회할 수 있는 구조 | `dict` |
+| `Sequence[str]` | 문자열 원소들이 순서대로 들어 있는 구조 | 부모는 `tuple`, 자식은 `list` |
+| `tuple[str, ...]` | 문자열이 0개 이상인 튜플 | `()`, `("A",)`, `("C", "B")` |
+
+타입 힌트가 전달된 딕셔너리를 변환하거나 실행 중 자료형을 강제하지는 않습니다. 반면 `@dataclass(frozen=True)`의 필드 재할당 금지는 실행 중에도 적용됩니다. 연결 딕셔너리는 외부에서 수정할 수 있으므로, DAG 유지는 정상적인 `add()` 경로로 등록한다는 사용 규칙을 전제로 합니다.
+
+### `get()`과 `setdefault()`, 집합 메서드
+
+`set()`은 빈 집합을 만듭니다. `{}`는 빈 딕셔너리이므로 구분해야 합니다.
+
+| 표현 | 키가 있을 때 | 키가 없을 때 |
+| --- | --- | --- |
+| `d.get(key, set())` | 기존 값 반환 | 빈 집합 반환. 딕셔너리는 그대로 |
+| `d.setdefault(key, set())` | 기존 값 반환 | 빈 집합을 딕셔너리에 저장하고 반환 |
+
+등록은 다음처럼 풀어 읽을 수 있습니다.
+
+```python
+# 원래 코드
+self.authors.setdefault(commit.author, set()).add(commit.hash)
+
+# 같은 동작을 길게 표현
+if commit.author not in self.authors:
+    self.authors[commit.author] = set()
+self.authors[commit.author].add(commit.hash)
+```
+
+조회 시의 `return self.authors.get(author, set()).copy()`는 해당 작성자의 집합 또는 빈 집합을 **복사해서 반환**합니다. 호출자가 결과를 지워도 원본 색인은 유지됩니다.
+
+| 집합 연산 | 기존 `result` 변경 여부 | 반환값 |
+| --- | --- | --- |
+| `result.intersection_update(other)` | 변경 | `None` |
+| `result.intersection(other)` | 변경하지 않음 | 새 교집합 |
+| `result & other` | 변경하지 않음 | 새 교집합 |
+
+모두 Python이 기본으로 제공하는 `set`의 메서드 또는 연산자입니다.
+
+### 시계 함수를 저장했다가 호출하기
+
+```python
+self._clock = clock or (lambda: datetime.now(timezone.utc))
+```
+
+`clock`을 전달하지 않으면 현재 UTC 시각을 반환하는 함수 객체를 저장합니다. 이 대입 시점에 시각을 구하는 것이 아닙니다.
+
+```python
+self._clock     # 저장된 함수 객체
+self._clock()   # 함수를 실행해 datetime 객체를 얻음
+```
+
+`_clock`은 클래스에 정의한 일반 메서드가 아니라 함수를 담은 인스턴스 속성입니다. 커밋을 만들 때 호출하므로 그때의 시각이 저장됩니다. 테스트에서는 `Repository(clock=lambda: fixed_time)`처럼 고정된 시각을 반환하는 함수를 전달할 수 있습니다.
+
+## 부록 B — 테스트로 확인하기
+
+테스트는 **실제 결과와 예상 결과를 비교하는 Python 코드**입니다. 예를 들어 `assertEqual(실제값, 예상값)`은 두 값이 다르면 실패합니다. 아래 함수명은 구현 근거를 찾기 위한 안내이며, 통과 여부는 명령을 실행해서 확인합니다.
+
+### 전체 테스트 실행
+
+프로젝트 최상위 폴더에서 실행합니다.
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+현재 Python 3.11.13 환경에서 44개 테스트가 통과하는 것을 확인했습니다. `ok`는 개별 테스트 통과, `FAIL`은 결과 불일치, `ERROR`는 실행 중 오류를 뜻합니다. 마지막에 `OK`가 나오면 실행한 테스트가 모두 통과한 것입니다.
+
+| 테스트 파일 | 검증하는 내용 |
+| --- | --- |
+| [test_repository.py](tests/test_repository.py) | 초기화, 브랜치·커밋·병합 상태, 검색·정렬 결과, 잘못된 조작 시 상태 유지 |
+| [test_algorithms.py](tests/test_algorithms.py) | 위상 정렬, 경로 동률, 조상 중복 제거, 긴 이력, 병합 정렬 |
+| [test_cli.py](tests/test_cli.py) | 명령 해석, 출력 형식, 오류 후 계속 실행, 종료 처리, 표준 정렬 API 미사용 |
+
+### 테스트 하나만 실행
+
+병합 커밋의 조상을 검사하는 테스트 하나는 다음 명령으로 실행합니다.
+
+```bash
+python3 -m unittest tests.test_repository.RepositoryTests.test_merge_ancestors_include_both_branches_once -v
+```
+
+명령의 구조는 `모듈.클래스.메서드`입니다.
+
+```text
+tests.test_repository → tests/test_repository.py
+RepositoryTests → 그 파일 안의 테스트 클래스
+test_merge_ancestors_include_both_branches_once → 실행할 테스트 메서드
+```
+
+코드 위치를 안내하는 `파일명:157`의 숫자는 줄 번호입니다. 테스트 실행 명령에 줄 번호를 넣는 것은 아닙니다.
+
+긴 이력 테스트 하나만 실행하려면 다음과 같습니다.
+
+```bash
+python3 -m unittest tests.test_algorithms.GraphAlgorithmTests.test_long_history_does_not_recurse -v
+```
+
+이 테스트는 커밋 ID `0 → 1 → … → 1999`를 연결하고 마지막 커밋의 조상이 1,999개인지 확인합니다. 즉, 커밋 2,000개와 연결 1,999개인 이력입니다.
+
+### 평가 항목별 대표 테스트 찾기
+
+아래는 대표 테스트이며, 전체 검증 목록은 각 테스트 파일에 있습니다.
+
+| 평가 항목 | 테스트 위치 | 대표 메서드 | 확인하는 내용 |
+| --- | --- | --- | --- |
+| 1.1 초기화 | `test_repository.py / RepositoryTests` | `test_initialization` | 빈 main·HEAD·사용자 설정 |
+| 1.2 브랜치 | `test_repository.py / RepositoryTests` | `test_branch_switch_and_commit_update_only_current_branch` | 현재 브랜치만 새 커밋으로 이동 |
+| 1.3 LOG | `test_repository.py / RepositoryTests` | `test_log_includes_all_branches_and_parent_first_after_merge` | 전체 커밋과 부모 우선 순서 |
+| 1.4 PATH | `test_repository.py / RepositoryTests` | `test_path_lexicographic_tie_in_both_directions` | 최단 경로와 사전순 동률 |
+| 1.5 조상 | `test_repository.py / RepositoryTests` | `test_merge_ancestors_include_both_branches_once` | 병합 양쪽 조상을 각각 한 번 포함 |
+| 1.5 조상 | `test_algorithms.py / GraphAlgorithmTests` | `test_all_ancestors_without_duplicates_or_self` | 중복과 자기 자신 제외 |
+| 1.5 조상 | `test_algorithms.py / GraphAlgorithmTests` | `test_long_history_does_not_recurse` | 커밋 2,000개의 이력 탐색 |
+| 1.6 검색 | `test_repository.py / RepositoryTests` | `test_multiple_keywords_use_and` | 여러 검색 단어의 교집합 |
+| 2.2 ID | `test_repository.py / RepositoryTests` | `test_hash_unique_across_reinitialization` | 재초기화 후 ID 비재사용 |
+| 2.3 색인 갱신 | `test_repository.py / RepositoryTests` | `test_merge_has_two_parents_and_updates_index` | 병합 커밋도 검색 색인에 등록 |
+| 3.1 DAG | `test_algorithms.py / GraphAlgorithmTests` | `test_cycle_detected` | 순환 그래프에서 위상 정렬 오류 |
+| 3.2 위상 정렬 | `test_algorithms.py / GraphAlgorithmTests` | `test_topological_order_respects_every_parent` | 모든 부모가 자식보다 앞서는지 검사 |
+| 3.4 정렬 | `test_algorithms.py / MergeSortTests` | `test_stability_and_input_unchanged` | 안정 정렬과 원본 입력 보존 |
+| 3.5 검색 비용 | `test_repository.py / RepositoryTests` | `test_search_does_not_scan_all_commits` | 전체 커밋 순회 없이 검색 |
